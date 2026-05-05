@@ -116,6 +116,56 @@ class CotizacionViewSet(viewsets.ModelViewSet):
     search_fields    = ['numero', 'cliente__nombre', 'cliente__apellido']
     filterset_fields = ['estado']
 
+    def create(self, request, *args, **kwargs):
+        items_data = request.data.pop('items', [])
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        cotizacion = serializer.save()
+        for item in items_data:
+            ItemCotizacion.objects.create(
+                cotizacion   = cotizacion,
+                tipo         = item.get('tipo', 'servicio'),
+                descripcion  = item.get('descripcion', ''),
+                cantidad     = item.get('cantidad', 1),
+                precio_unit  = item.get('precio_unitario', item.get('precio_unit', 0)),
+                descuento    = item.get('descuento', 0),
+            )
+        return Response(self.get_serializer(cotizacion).data, status=201)
+
+    def update(self, request, *args, **kwargs):
+        items_data = request.data.pop('items', None)
+        instance   = self.get_object()
+        serializer = self.get_serializer(instance, data=request.data, partial=kwargs.pop('partial', False))
+        serializer.is_valid(raise_exception=True)
+        cotizacion = serializer.save()
+        if items_data is not None:
+            cotizacion.items.all().delete()
+            for item in items_data:
+                ItemCotizacion.objects.create(
+                    cotizacion   = cotizacion,
+                    tipo         = item.get('tipo', 'servicio'),
+                    descripcion  = item.get('descripcion', ''),
+                    cantidad     = item.get('cantidad', 1),
+                    precio_unit  = item.get('precio_unitario', item.get('precio_unit', 0)),
+                    descuento    = item.get('descuento', 0),
+                )
+        return Response(self.get_serializer(cotizacion).data)
+
+    @action(detail=True, methods=['post'])
+    def convertir_factura(self, request, pk=None):
+        from decimal import Decimal
+        cot = self.get_object()
+        if cot.estado != 'aprobada':
+            return Response({'error': 'Solo se pueden convertir cotizaciones aprobadas'}, status=400)
+        subtotal = sum(i.subtotal for i in cot.items.all())
+        factura  = Factura.objects.create(
+            cliente      = cot.cliente,
+            cotizacion   = cot,
+            subtotal     = subtotal,
+            total        = subtotal,
+            estado       = 'pendiente',
+        )
+        return Response(FacturaSerializer(factura).data, status=201)
 
 class FacturaViewSet(viewsets.ModelViewSet):
     queryset         = Factura.objects.all()
